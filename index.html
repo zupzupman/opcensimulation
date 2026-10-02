@@ -1,1 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SILANG-ALERT Operation Center</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root {
+    --red-dark: #7E1414; --red: #971919; --red-bright: #E42424;
+    --bg: #F6F5F4; --card: #ffffff; --text: #1a1a1a; --text-muted: #6b6b6b; --border: #e8e4e3;
+    --amber: #F2A93C; --green: #3CB043; --redstat: #D32F2F;
+  }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; margin:0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
 
+<!-- ===== LOGIN SCREEN ===== -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center p-6"
+     style="background: linear-gradient(135deg, var(--red-bright), var(--red-dark));">
+  <form id="login-form" class="w-full max-w-sm bg-white rounded-2xl p-8 shadow-xl">
+    <h1 class="text-xl font-bold mb-1">SILANG-ALERT</h1>
+    <p class="text-sm text-gray-500 mb-6">Operation Center — staff sign in</p>
+
+    <label class="text-sm font-semibold block mb-1">Email</label>
+    <input id="email" type="email" required
+      class="w-full border rounded-lg px-3 py-2 mb-4 text-sm" style="border-color: var(--red);" />
+
+    <label class="text-sm font-semibold block mb-1">Password</label>
+    <input id="password" type="password" required
+      class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" style="border-color: var(--red);" />
+
+    <p id="login-error" class="text-xs text-red-600 mb-3 min-h-[1em]"></p>
+
+    <button type="submit" id="login-button"
+      class="w-full rounded-full py-2.5 font-bold text-white" style="background: var(--red);">
+      Sign in
+    </button>
+  </form>
+</div>
+
+<!-- ===== APP SCREEN ===== -->
+<div id="app-screen" class="hidden">
+  <header style="background: linear-gradient(135deg, var(--red-bright), var(--red-dark));" class="px-6 py-5">
+    <div class="max-w-5xl mx-auto flex items-center justify-between">
+      <div>
+        <h1 class="text-white text-xl font-bold tracking-wide">SILANG-ALERT</h1>
+        <p class="text-white/80 text-sm">Operation Center — MDRRMO Silang, Cavite</p>
+      </div>
+      <button onclick="handleLogout()" class="text-white/90 text-sm underline">Sign out</button>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-6 py-6">
+    <div class="flex gap-2 mb-6" id="tabs"></div>
+    <div class="rounded-xl overflow-x-auto" style="background:var(--card); border:1px solid var(--border);">
+      <div id="list"></div>
+      <div id="empty" class="hidden text-center py-16 text-sm" style="color:var(--text-muted)">Nothing here yet.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ---- Fill these in from your project's .env (same values as
+// EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ----
+const SUPABASE_URL = 'https://szrlvhtxjvgiblysjmdj.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_Y52R7VjaZdZSIKbJnvHPeg_WRtfexdK';
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const STATUS_COLOR = { pending: 'var(--amber)', verified: 'var(--green)', rejected: 'var(--redstat)' };
+const STATUS_LABEL = { pending: 'Pending', verified: 'Verified', rejected: 'Rejected' };
+const HAZARD_STYLE = {
+  'Sunog / Fire': { bg: '#E4551B', emoji: '🔥' },
+  'Baha / Flood': { bg: '#1B3A6B', emoji: '🌊' },
+  'Lindol / Earthquake': { bg: '#1B3A6B', emoji: '🌊' },
+  'Landslide': { bg: '#6B4A2B', emoji: '⛰️' },
+  'Iba pa / Other': { bg: '#888', emoji: '⚠️' },
+};
+
+let reports = [];
+let activeTab = 'pending';
+
+function formatTimeAgo(dateString) {
+  const diffMs = Date.now() - new Date(dateString).getTime();
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60) return `${Math.max(sec,1)}s ago`;
+  const min = Math.floor(sec / 60); if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60); if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24); if (day < 7) return `${day}d ago`;
+  return `${Math.floor(day / 7)}w ago`;
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const errorEl = document.getElementById('login-error');
+  const btn = document.getElementById('login-button');
+  errorEl.textContent = '';
+  btn.disabled = true; btn.textContent = 'Signing in…';
+
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { errorEl.textContent = error.message; btn.disabled = false; btn.textContent = 'Sign in'; return; }
+
+  const { data: staffRow } = await sb.from('staff').select('user_id').eq('user_id', data.user.id).maybeSingle();
+  if (!staffRow) {
+    errorEl.textContent = 'This account is not authorized for the Operation Center.';
+    await sb.auth.signOut();
+    btn.disabled = false; btn.textContent = 'Sign in';
+    return;
+  }
+
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('app-screen').classList.remove('hidden');
+  await loadReports();
+});
+
+async function handleLogout() {
+  await sb.auth.signOut();
+  document.getElementById('app-screen').classList.add('hidden');
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('login-form').reset();
+}
+
+async function loadReports() {
+  const { data, error } = await sb.from('reports').select('*').order('created_at', { ascending: false });
+  if (error) { alert('Could not load reports: ' + error.message); return; }
+  reports = data || [];
+  render();
+}
+
+async function setStatus(id, status) {
+  const { error } = await sb.from('reports').update({ status }).eq('id', id);
+  if (error) { alert('Update failed: ' + error.message); return; }
+  await loadReports();
+}
+
+function tabCount(status) { return reports.filter(r => r.status === status).length; }
+
+function renderTabs() {
+  const tabs = ['pending', 'verified', 'rejected'];
+  document.getElementById('tabs').innerHTML = tabs.map(t => `
+    <button onclick="activeTab='${t}'; render();"
+      class="px-4 py-2 rounded-full text-sm font-semibold border transition"
+      style="${activeTab === t
+        ? `background:${STATUS_COLOR[t]}; color:#fff; border-color:${STATUS_COLOR[t]};`
+        : `background:var(--card); color:var(--text-muted); border-color:var(--border);`}">
+      ${STATUS_LABEL[t]} <span class="opacity-80">(${tabCount(t)})</span>
+    </button>
+  `).join('');
+}
+
+function renderList() {
+  const items = reports.filter(r => r.status === activeTab);
+  const list = document.getElementById('list');
+  const empty = document.getElementById('empty');
+
+  if (items.length === 0) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden');
+
+  list.innerHTML = items.map(r => {
+    const h = HAZARD_STYLE[r.hazard_type] || { bg: '#888', emoji: '⚠️' };
+    const photo = r.photo_url ? `<img src="${r.photo_url}" class="w-14 h-14 rounded-lg object-cover shrink-0" />` : '';
+    const actions = r.status === 'pending' ? `
+      <div class="flex gap-2 shrink-0">
+        <button onclick="setStatus('${r.id}', 'verified')" class="px-3 py-1.5 rounded-full text-xs font-semibold text-white" style="background:var(--green)">Verify</button>
+        <button onclick="setStatus('${r.id}', 'rejected')" class="px-3 py-1.5 rounded-full text-xs font-semibold text-white" style="background:var(--redstat)">Reject</button>
+      </div>` : `
+      <div class="flex gap-2 shrink-0">
+        <button onclick="setStatus('${r.id}', 'pending')" class="px-3 py-1.5 rounded-full text-xs font-semibold" style="color:var(--text-muted); border:1px solid var(--border)">Move to Pending</button>
+      </div>`;
+
+    return `
+      <div class="flex items-center gap-4 px-5 py-4" style="border-bottom:1px solid var(--border)">
+        <div class="w-11 h-11 rounded-full flex items-center justify-center text-lg shrink-0" style="background:${h.bg}">${h.emoji}</div>
+        ${photo}
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2">
+            <p class="font-semibold text-sm truncate">${r.hazard_type}</p>
+            <span class="text-xs px-2 py-0.5 rounded-full text-white shrink-0" style="background:${STATUS_COLOR[r.status]}">${STATUS_LABEL[r.status]}</span>
+          </div>
+          <p class="text-xs truncate" style="color:var(--text-muted)">${r.address}</p>
+          <p class="text-xs mt-1" style="color:var(--text-muted)">${r.description || ''}</p>
+          <p class="text-xs mt-1" style="color:var(--text-muted)">Severity ${r.severity}/5 · ${formatTimeAgo(r.created_at)}</p>
+        </div>
+        ${actions}
+      </div>`;
+  }).join('');
+}
+
+function render() { renderTabs(); renderList(); }
+</script>
+
+</body>
+</html>
